@@ -16,20 +16,21 @@ Outputs (in output/):
     <content>_spatial_<fg>_<bg>.jpg      (final composited result)
     masks/<content>_mask.png             (the fg/bg mask)
 """
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 import argparse
-import os
 import sys
 import numpy as np
 import torch
 import torch.nn as nn
-from PIL import Image, ImageFilter
+from PIL import Image
 from torchvision import transforms
 from torchvision.utils import save_image
 from os.path import basename, splitext
+from matting_integration import get_alpha_matte_from_voc, get_alpha_matte_from_trimap
 
 # ── Reuse model definitions from Eval.py ──────────────────────────────────────
-# (copy the model code here so we don't depend on importing Eval.py)
 
 def calc_mean_std(feat, eps=1e-5):
     size = feat.size()
@@ -170,27 +171,6 @@ def run_sanet(content_tensor, style_tensor, decoder, transform,
 
     return out
 
-# ── Mask generation ───────────────────────────────────────────────────────────
-
-def get_mask(content_path, mask_path, feather=10):
-    """Generate or load a fg mask. Returns numpy float32 array H×W×1, values 0–1."""
-    if not os.path.exists(mask_path):
-        print(f"Generating mask with rembg → {mask_path}")
-        from rembg import remove
-        img = Image.open(content_path).convert("RGBA")
-        removed = remove(img)
-        alpha = removed.split()[3]  # foreground=255, background=0
-        if feather > 0:
-            alpha = alpha.filter(ImageFilter.GaussianBlur(radius=feather))
-        os.makedirs(os.path.dirname(mask_path) or ".", exist_ok=True)
-        alpha.save(mask_path)
-        print(f"Mask saved: {mask_path}")
-    else:
-        print(f"Loading existing mask: {mask_path}")
-        alpha = Image.open(mask_path).convert("L")
-
-    return alpha
-
 # ── Blend two stylized images using mask ─────────────────────────────────────
 
 def blend(out_fg, out_bg, mask_pil, content_size):
@@ -223,10 +203,11 @@ def main():
                         help="Style applied to FOREGROUND")
     parser.add_argument("--style_bg",  type=str, required=True,
                         help="Style applied to BACKGROUND")
-    parser.add_argument("--mask",       type=str, default=None,
-                        help="Path to existing mask PNG (optional; generated if not given)")
-    parser.add_argument("--feather",    type=int, default=10,
-                        help="Mask edge softness in pixels")
+    parser.add_argument("--mask", type=str, default=None,
+                        help="Path to VOC segmentation mask")
+    parser.add_argument("--trimap", type=str, default=None,
+                    help="Path to a pre-made trimap (values 0/128/255). "
+                         "Use this OR --mask, not both.")
     parser.add_argument("--output",     type=str, default="output")
     parser.add_argument("--decoder",    type=str, default="decoder_iter_500000.pth")
     parser.add_argument("--transform",  type=str, default="transformer_iter_500000.pth")
@@ -266,9 +247,30 @@ def main():
     style_fg_t, _           = img_tf(args.style_fg, args.size)
     style_bg_t, _           = img_tf(args.style_bg, args.size)
 
-    # ── Generate / load mask
-    mask_path = args.mask or os.path.join("masks", f"{c_stem}_mask.png")
-    mask_pil = get_mask(args.content, mask_path, feather=args.feather)
+    # ── Run matting to produce soft alpha
+    trimap_path = f"masks/{c_stem}_trimap.png"
+    alpha_path  = f"masks/{c_stem}_alpha.png"
+
+    if args.trimap:
+        print(f"Using existing trimap: {args.trimap}")
+        mask_pil = get_alpha_matte_from_trimap(
+            content_path    = args.content,
+            trimap_path     = args.trimap,
+            alpha_save_path = alpha_path,
+            # tune these per image — start with HW1's woman config:
+            K=12, spatial_weight=0.08, sigma=0.08, my_lambda=100,
+            use_hsv=False, use_edges=False, use_seed_distance=False,
+        )
+    elif args.mask:
+        trimap_path = f"masks/{c_stem}_trimap.png"
+        mask_pil = get_alpha_matte_from_voc(
+            content_path     = args.content,
+            voc_mask_path    = args.mask,
+            trimap_save_path = trimap_path,
+            alpha_save_path  = alpha_path,
+        )
+    else:
+        raise SystemExit("Pass either --mask (VOC mask) or --trimap (pre-made trimap)")
 
     # ── Run style transfer for fg style
     print("Running SANet with fg style...")
@@ -289,10 +291,11 @@ def main():
     print("Blending with mask...")
     result = blend(out_fg, out_bg, mask_pil, content_size)
 
-    out_name = os.path.join(args.output, f"{c_stem}_spatial_{fg_stem}_{bg_stem}.jpg")
+    out_name = os.path.join(args.output, f"{c_stem}_spatial_{fg_stem}_{bg_stem}_new.jpg")
     result.save(out_name)
     print(f"\n✓ Done! Spatial result saved to: {out_name}")
-    print(f"  Mask saved to:                  {mask_path}")
+    print(f"  Trimap saved to:                {trimap_path}")
+    print(f"  Alpha matte saved to:           {alpha_path}")
 
 if __name__ == "__main__":
     main()
