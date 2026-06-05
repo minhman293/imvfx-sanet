@@ -5,10 +5,7 @@ Applies Style A to the foreground and Style B to the background,
 then composites them using a soft mask.
 
 Usage:
-    python spatial_transfer.py \
-        --content input/chicago.jpg \
-        --style_fg style/medieval.jpg \
-        --style_bg style/wave.jpg
+    python spatial_transfer.py --content input/bird.jpg --mask SegmentationObject/bird_mask.png --style_fg style/medieval.jpg --style_bg style/wave.jpg
 
 Outputs (in output/):
     <content>_fg_<style_fg>.jpg          (full image with fg style)
