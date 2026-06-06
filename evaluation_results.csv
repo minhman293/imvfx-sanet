@@ -1,0 +1,2 @@
+Content Image,FG Style,BG Style,Output File,FG Runtime (s),BG Runtime (s),Total Runtime (s),LPIPS,FG Gram Loss,BG Gram Loss
+bird.jpg,trial.jpg,the_resevoir_at_poitiers.jpg,bird_spatial_trial_the_resevoir_at_poitiers.jpg,0.8567,0.2422,1.0989,0.4892,413.6203,55.8068
